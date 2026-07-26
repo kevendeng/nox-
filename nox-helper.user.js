@@ -1,0 +1,1420 @@
+// ==UserScript==
+// @name         NoxInfluencer Helper
+// @namespace    http://tampermonkey.net/
+// @version      8.6
+// @description  auto check, keyword input, batch-create folders, and email project automation
+// @match        https://cn.noxinfluencer.com/search/*
+// @match        https://cn.noxinfluencer.com/lookalike/*
+// @match        https://cn.noxinfluencer.com/resource-folder/*
+// @match        https://cn.noxinfluencer.com/email/*
+// @match        https://cn.noxinfluencer.com/crm-detail/*
+// @grant        none
+// @run-at       document-end
+// @updateURL    https://raw.githubusercontent.com/kevendeng/nox-/main/nox-helper.user.js
+// @downloadURL  https://raw.githubusercontent.com/kevendeng/nox-/main/nox-helper.user.js
+// ==/UserScript==
+(function () {
+    'use strict';
+    console.log('Nox helper V8.6 started');
+    var isScriptRunning = false;
+    var stopRequested = false;
+    var totalUsersChecked = 0;
+    var maxCheckLimit = 1000;
+    var CHECK_DELAY = 800;
+    var NEXT_PAGE_WAIT_TIME = 2500;
+    function sleep(ms) {
+        return new Promise(function (resolve, reject) {
+            if (stopRequested) return reject(new Error('stopped'));
+            setTimeout(function () {
+                if (stopRequested) return reject(new Error('stopped'));
+                resolve();
+            }, ms);
+        });
+    }
+    function sleepPlain(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function isElementVisible(elem) {
+        if (!elem) return false;
+        var rect = elem.getBoundingClientRect();
+        return (rect.width > 0 && rect.height > 0 && window.getComputedStyle(elem).display !== 'none');
+    }
+    async function waitForPageReady(timeout) {
+        timeout = timeout || 20000;
+        var startTime = Date.now();
+        while (Date.now() - startTime < timeout) {
+            if (stopRequested) throw new Error('stopped');
+            var items = document.querySelectorAll('.youtube-channel-item');
+            var selectAll = document.querySelector('.result-pagination-left .el-checkbox__input');
+            if (items.length > 0 && selectAll) { await sleep(1000); return true; }
+            await sleep(500);
+        }
+        return false;
+    }
+    async function processCurrentPage() {
+        if (totalUsersChecked >= maxCheckLimit) { stopRequested = true; return 0; }
+        var isReady = await waitForPageReady();
+        if (!isReady) return 0;
+        var selectAllButton = document.querySelector('.result-pagination-left .el-checkbox__input');
+        if (selectAllButton) {
+            if (selectAllButton.classList.contains('is-checked')) return 0;
+            selectAllButton.click();
+            await sleep(CHECK_DELAY);
+            var checkedOnPage = document.querySelectorAll('.youtube-channel-item .el-checkbox__input.is-checked').length;
+            totalUsersChecked += checkedOnPage;
+            updateButtonText();
+            return checkedOnPage;
+        }
+        return 0;
+    }
+    async function goToNextPage() {
+        var nextPageButton = document.querySelector('.search-pagination-container .right');
+        if (nextPageButton && !nextPageButton.classList.contains('disabled') && isElementVisible(nextPageButton)) {
+            nextPageButton.click();
+            return true;
+        }
+        return false;
+    }
+    async function startBatchProcess() {
+        if (isScriptRunning) return;
+        var userLimit = parseInt(limitInput.value, 10);
+        if (isNaN(userLimit) || userLimit <= 0) { alert('please enter a valid number'); return; }
+        maxCheckLimit = userLimit;
+        isScriptRunning = true;
+        stopRequested = false;
+        totalUsersChecked = 0;
+        updateUIStatus(true);
+        try {
+            while (!stopRequested && totalUsersChecked < maxCheckLimit) {
+                await processCurrentPage();
+                if (stopRequested || totalUsersChecked >= maxCheckLimit) break;
+                var hasNext = await goToNextPage();
+                if (!hasNext) break;
+                await sleep(NEXT_PAGE_WAIT_TIME);
+            }
+        } catch (error) {
+            console.log(error.message);
+        } finally {
+            isScriptRunning = false;
+            updateUIStatus(false);
+            alert('Done. Checked ' + totalUsersChecked + ' influencers.');
+        }
+    }
+    var kwSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    function getKwInput() {
+        return document.querySelector('input.search-value-input')
+            || document.querySelector('.input-content input')
+            || document.querySelector('.input-box input')
+            || document.querySelector('.search-input-fix input');
+    }
+    function focusInputBox() {
+        var box = document.querySelector('.input-content')
+               || document.querySelector('.input-box')
+               || document.querySelector('.search-input-fix');
+        if (box) {
+            ['mousedown', 'mouseup', 'click'].forEach(function (type) {
+                box.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+            });
+        }
+    }
+    async function addWord(kw) {
+        var before = document.querySelectorAll('.keywords-item').length;
+        for (var t = 0; t < 4; t++) {
+            focusInputBox();
+            await sleepPlain(350);
+            var input = getKwInput();
+            if (!input) { await sleepPlain(300); continue; }
+            input.focus();
+            kwSetter.call(input, kw);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            await sleepPlain(600);
+            var evs = ['keydown', 'keypress', 'keyup'];
+            for (var k = 0; k < evs.length; k++) {
+                input.dispatchEvent(new KeyboardEvent(evs[k], { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+            }
+            await sleepPlain(800);
+            if (document.querySelectorAll('.keywords-item').length > before) return true;
+        }
+        return false;
+    }
+    async function runKeywords() {
+        var raw = prompt('Paste keywords, one per line:');
+        if (!raw || !raw.trim()) return;
+        keywordButton.disabled = true;
+        var oldText = keywordButton.textContent;
+        function countExclude() { return document.querySelectorAll('.keywords-item.is-exclude').length; }
+        var excludeBaseline = countExclude();
+        var guard = 0;
+        while (guard++ < 60) {
+            var normals = document.querySelectorAll('.keywords-item:not(.is-exclude)');
+            if (!normals.length) break;
+            var item = normals[0];
+            var x = item.querySelector('.kol-icon-close-filled') || item.querySelector('[class*="close"]');
+            if (!x) break;
+            var beforeTotal = document.querySelectorAll('.keywords-item').length;
+            x.click();
+            await sleepPlain(350);
+            if (countExclude() !== excludeBaseline) {
+                console.log('[keywords] aborted cleanup: an exclude word was affected');
+                break;
+            }
+            if (document.querySelectorAll('.keywords-item').length >= beforeTotal) break;
+        }
+        var keywords = raw.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+        var failed = [];
+        for (var i = 0; i < keywords.length; i++) {
+            if (document.querySelectorAll('.keywords-item').length >= 20) {
+                for (var j = i; j < keywords.length; j++) failed.push(keywords[j]);
+                break;
+            }
+            keywordButton.textContent = 'adding ' + (i + 1) + '/' + keywords.length;
+            var ok = await addWord(keywords[i]);
+            if (!ok) failed.push(keywords[i]);
+            await sleepPlain(300);
+        }
+        keywordButton.disabled = false;
+        keywordButton.textContent = oldText;
+        if (failed.length) alert('Done, but failed: ' + failed.join(', '));
+        else alert('All keywords added!');
+    }
+    var startButton, stopButton, limitInput, controlsDiv, keywordButton;
+    function isFolderPage() { return location.href.indexOf('/resource-folder/') !== -1; }
+    function isEmailPage() { return location.href.indexOf('/email/') !== -1; }
+    function isCrmPage() { return location.href.indexOf('/crm-detail/') !== -1; }
+    function currentPageType() {
+        if (isFolderPage()) return 'folder';
+        if (isEmailPage()) return 'email';
+        if (isCrmPage()) return 'crm';
+        return 'search';
+    }
+    var LS_CODES = 'nox-folder-codes';
+    var folderStopRequested = false;
+    function getSavedCodes() {
+        try { return localStorage.getItem(LS_CODES) || ''; } catch (e) { return ''; }
+    }
+    function saveCodes(text) {
+        try { localStorage.setItem(LS_CODES, text); } catch (e) {}
+    }
+    function parseCodeLine(line) {
+        line = line.trim();
+        if (!line) return null;
+        var code = line, collabs = [];
+        var gt = line.indexOf('>');
+        if (gt !== -1) {
+            code = line.slice(0, gt).trim();
+            var rest = line.slice(gt + 1).trim();
+            collabs = rest.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean);
+        }
+        if (!code) return null;
+        return { code: code, collaborators: collabs };
+    }
+    function openCreateDialog() {
+        var btns = document.querySelectorAll('button, .create-btn, [class*="create"]');
+        for (var i = 0; i < btns.length; i++) {
+            var t = (btns[i].textContent || '').replace(/\s/g, '');
+            if (t.indexOf('创建') !== -1 && isElementVisible(btns[i])) { btns[i].click(); return true; }
+        }
+        return false;
+    }
+    function getDialog() {
+        var dialogs = document.querySelectorAll('.el-dialog__wrapper');
+        for (var i = 0; i < dialogs.length; i++) {
+            if (isElementVisible(dialogs[i]) && dialogs[i].querySelector('.pool-name-input')) return dialogs[i];
+        }
+        return null;
+    }
+    async function waitForDialog(timeout) {
+        timeout = timeout || 6000;
+        var start = Date.now();
+        while (Date.now() - start < timeout) {
+            var d = getDialog();
+            if (d) return d;
+            await sleepPlain(200);
+        }
+        return null;
+    }
+    function setFolderName(dialog, name) {
+        var input = dialog.querySelector('.pool-name-input input') || dialog.querySelector('.el-input__inner');
+        if (!input) return false;
+        input.focus();
+        kwSetter.call(input, name);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    }
+    async function setScopeAndCollaborators(dialog, collaborators) {
+        var scope = dialog.querySelector('.pool-scope') || dialog;
+        if (collaborators.length === 0) {
+            var radios = scope.querySelectorAll('.el-radio');
+            for (var i = 0; i < radios.length; i++) {
+                if ((radios[i].textContent || '').indexOf('私有') !== -1) { radios[i].click(); break; }
+            }
+            return { notFound: [] };
+        }
+        var radios2 = scope.querySelectorAll('.el-radio');
+        for (var j = 0; j < radios2.length; j++) {
+            if ((radios2[j].textContent || '').indexOf('部分可见') !== -1) { radios2[j].click(); break; }
+        }
+        await sleepPlain(400);
+        var trigger = scope.querySelector('.el-select') || dialog.querySelector('.el-select');
+        if (trigger) { trigger.click(); await sleepPlain(500); }
+        var notFound = [];
+        for (var c = 0; c < collaborators.length; c++) {
+            var want = collaborators[c].trim().toLowerCase();
+            var dd = document.querySelector('.progress-cooperator-select') ||
+                     document.querySelector('.el-select-dropdown.is-multiple');
+            var items = dd ? dd.querySelectorAll('.el-select-dropdown__item') : [];
+            var pool = [];
+            for (var k = 0; k < items.length; k++) {
+                if (items[k].classList.contains('is-disabled')) continue;
+                var labelEl = items[k].querySelector('.el-checkbox__label') || items[k];
+                var nm = (labelEl.textContent || '').trim().toLowerCase();
+                pool.push({ el: items[k], name: nm, short: nm.split('@')[0] });
+            }
+            var target = null;
+            for (var p = 0; p < pool.length; p++) { if (pool[p].name === want) { target = pool[p]; break; } }
+            if (!target) { for (var p2 = 0; p2 < pool.length; p2++) { if (pool[p2].short === want) { target = pool[p2]; break; } } }
+            if (!target) { for (var p3 = 0; p3 < pool.length; p3++) { if (pool[p3].name.indexOf(want) !== -1) { target = pool[p3]; break; } } }
+            if (target) {
+                var alreadyChecked = target.el.querySelector('.el-checkbox__input.is-checked');
+                if (!alreadyChecked) target.el.click();
+                await sleepPlain(250);
+            } else {
+                notFound.push(collaborators[c]);
+            }
+        }
+        var header = dialog.querySelector('.el-dialog__title') || dialog.querySelector('.el-dialog__header');
+        if (header) header.click();
+        await sleepPlain(300);
+        return { notFound: notFound };
+    }
+    function confirmDialog(dialog) {
+        var candidates = dialog.querySelectorAll('.kol-btn, button');
+        for (var i = 0; i < candidates.length; i++) {
+            if (!isElementVisible(candidates[i])) continue;
+            var t = (candidates[i].textContent || '').replace(/\s/g, '');
+            if (t.indexOf('确认') !== -1 || t.indexOf('确定') !== -1) { candidates[i].click(); return true; }
+        }
+        var primary = dialog.querySelector('.kol-btn.primary');
+        if (primary && isElementVisible(primary)) { primary.click(); return true; }
+        return false;
+    }
+    async function createOneFolder(name, collaborators) {
+        if (!openCreateDialog()) return { ok: false, reason: '找不到创建按钮' };
+        var dialog = await waitForDialog();
+        if (!dialog) return { ok: false, reason: '弹窗没出现' };
+        await sleepPlain(300);
+        if (!setFolderName(dialog, name)) return { ok: false, reason: '找不到名称框' };
+        await sleepPlain(300);
+        var res = await setScopeAndCollaborators(dialog, collaborators);
+        await sleepPlain(300);
+        if (!confirmDialog(dialog)) return { ok: false, reason: '找不到确认按钮' };
+        var start = Date.now();
+        while (Date.now() - start < 5000) {
+            if (!getDialog()) return { ok: true, notFound: res.notFound };
+            await sleepPlain(300);
+        }
+        var d2 = getDialog();
+        if (d2) {
+            var cancelBtns = d2.querySelectorAll('.kol-btn, button');
+            for (var i = 0; i < cancelBtns.length; i++) {
+                if ((cancelBtns[i].textContent || '').replace(/\s/g, '').indexOf('取消') !== -1) { cancelBtns[i].click(); break; }
+            }
+        }
+        return { ok: false, reason: '确认后未关闭(可能重名)', notFound: res.notFound };
+    }
+    var folderRunning = false;
+    async function runCreateFolders() {
+        if (folderRunning) return;
+        var prefix = (folderPrefixInput.value || '').trim();
+        if (!prefix) { alert('请先输入日期前缀，例如 0708'); return; }
+        var raw = folderCodesInput.value || '';
+        saveCodes(raw);
+        var lines = raw.split('\n').map(parseCodeLine).filter(Boolean);
+        if (lines.length === 0) { alert('请先填写编号列表'); return; }
+        if (!confirm('将要创建 ' + lines.length + ' 个收藏夹，前缀 "' + prefix + '"。开始吗？')) return;
+        folderRunning = true;
+        folderStopRequested = false;
+        folderCreateBtn.disabled = true;
+        folderStopBtn.style.display = 'block';
+        var created = 0, failed = [], notFoundCollabs = {};
+        for (var i = 0; i < lines.length; i++) {
+            if (folderStopRequested) break;
+            var name = prefix + '-' + lines[i].code;
+            folderCreateBtn.textContent = '创建中 ' + (i + 1) + '/' + lines.length;
+            var r = await createOneFolder(name, lines[i].collaborators);
+            if (r.ok) {
+                created++;
+                if (r.notFound && r.notFound.length) r.notFound.forEach(function (n) { notFoundCollabs[n] = true; });
+            } else {
+                failed.push(name + '（' + r.reason + '）');
+            }
+            await sleepPlain(800);
+        }
+        folderRunning = false;
+        folderCreateBtn.disabled = false;
+        folderStopBtn.style.display = 'none';
+        folderCreateBtn.textContent = '开始批量创建';
+        var msg = '完成！成功创建 ' + created + ' 个。';
+        if (failed.length) msg += '\n失败 ' + failed.length + ' 个：\n' + failed.join('\n');
+        var nf = Object.keys(notFoundCollabs);
+        if (nf.length) msg += '\n\n这些协作者名字没匹配到（检查拼写）：' + nf.join('、');
+        alert(msg);
+    }
+    var folderPrefixInput, folderCodesInput, folderCreateBtn, folderStopBtn;
+    function updateUIStatus(running) {
+        startButton.disabled = running;
+        stopButton.style.display = running ? 'block' : 'none';
+        limitInput.disabled = running;
+        if (!running) {
+            startButton.textContent = 'Start check + next page';
+            startButton.style.backgroundColor = '#4CAF50';
+        }
+    }
+    function updateButtonText() {
+        if (isScriptRunning) {
+            startButton.textContent = 'Running (' + totalUsersChecked + '/' + maxCheckLimit + ')';
+            startButton.style.backgroundColor = '#FFA500';
+        }
+    }
+    function makeDraggable(panel, handle) {
+        var startX, startY, startLeft, startTop, dragging = false;
+        try {
+            var saved = JSON.parse(localStorage.getItem('nox-panel-pos') || 'null');
+            if (saved && typeof saved.left === 'number') {
+                panel.style.left = saved.left + 'px';
+                panel.style.top = saved.top + 'px';
+                panel.style.right = 'auto';
+            }
+        } catch (e) {}
+        handle.addEventListener('mousedown', function (e) {
+            dragging = true;
+            var rect = panel.getBoundingClientRect();
+            startX = e.clientX;
+            startY = e.clientY;
+            startLeft = rect.left;
+            startTop = rect.top;
+            panel.style.left = startLeft + 'px';
+            panel.style.top = startTop + 'px';
+            panel.style.right = 'auto';
+            e.preventDefault();
+        });
+        document.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            var newLeft = startLeft + (e.clientX - startX);
+            var newTop = startTop + (e.clientY - startY);
+            newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - panel.offsetWidth));
+            newTop = Math.max(0, Math.min(newTop, window.innerHeight - panel.offsetHeight));
+            panel.style.left = newLeft + 'px';
+            panel.style.top = newTop + 'px';
+        });
+        document.addEventListener('mouseup', function () {
+            if (!dragging) return;
+            dragging = false;
+            try {
+                localStorage.setItem('nox-panel-pos', JSON.stringify({
+                    left: parseInt(panel.style.left, 10),
+                    top: parseInt(panel.style.top, 10)
+                }));
+            } catch (e) {}
+        });
+    }
+    function initializeControls() {
+        if (document.getElementById('nox-script-ui')) return;
+        controlsDiv = document.createElement('div');
+        controlsDiv.id = 'nox-script-ui';
+        controlsDiv.setAttribute('data-page', currentPageType());
+        controlsDiv.style.position = 'fixed';
+        controlsDiv.style.top = '100px';
+        controlsDiv.style.right = '20px';
+        controlsDiv.style.zIndex = '2147483647';
+        controlsDiv.style.backgroundColor = '#ffffff';
+        controlsDiv.style.border = '2px solid #007bff';
+        controlsDiv.style.borderRadius = '8px';
+        controlsDiv.style.padding = '15px';
+        controlsDiv.style.display = 'flex';
+        controlsDiv.style.flexDirection = 'column';
+        controlsDiv.style.gap = '10px';
+        controlsDiv.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+        controlsDiv.style.width = '180px';
+        controlsDiv.style.fontFamily = 'sans-serif';
+        var title = document.createElement('div');
+        title.textContent = '✥ Nox Helper v8.5 (drag)';
+        title.style.textAlign = 'center';
+        title.style.fontWeight = 'bold';
+        title.style.cursor = 'move';
+        title.style.userSelect = 'none';
+        title.title = 'Drag me to move the panel';
+        makeDraggable(controlsDiv, title);
+        controlsDiv.appendChild(title);
+        if (isFolderPage()) {
+            buildFolderPanel(controlsDiv);
+        } else if (isEmailPage()) {
+            buildEmailPanel(controlsDiv);
+        } else if (isCrmPage()) {
+            buildCrmPanel(controlsDiv);
+        } else {
+            buildSearchPanel(controlsDiv);
+        }
+        document.body.appendChild(controlsDiv);
+        console.log('Nox UI mounted v8.5');
+    }
+    function buildSearchPanel(root) {
+        keywordButton = document.createElement('button');
+        keywordButton.textContent = 'Input keywords';
+        keywordButton.style.padding = '10px';
+        keywordButton.style.backgroundColor = '#38cb89';
+        keywordButton.style.color = 'white';
+        keywordButton.style.border = 'none';
+        keywordButton.style.borderRadius = '4px';
+        keywordButton.style.cursor = 'pointer';
+        keywordButton.style.fontWeight = 'bold';
+        keywordButton.addEventListener('click', runKeywords);
+        var divider = document.createElement('div');
+        divider.style.borderTop = '1px dashed #ccc';
+        divider.style.margin = '4px 0';
+        limitInput = document.createElement('input');
+        limitInput.type = 'number';
+        limitInput.value = '1000';
+        limitInput.style.padding = '5px';
+        limitInput.style.border = '1px solid #ccc';
+        startButton = document.createElement('button');
+        startButton.textContent = 'Start check + next page';
+        startButton.style.padding = '10px';
+        startButton.style.backgroundColor = '#4CAF50';
+        startButton.style.color = 'white';
+        startButton.style.border = 'none';
+        startButton.style.borderRadius = '4px';
+        startButton.style.cursor = 'pointer';
+        startButton.style.fontWeight = 'bold';
+        stopButton = document.createElement('button');
+        stopButton.textContent = 'Stop';
+        stopButton.style.padding = '8px';
+        stopButton.style.backgroundColor = '#f44336';
+        stopButton.style.color = 'white';
+        stopButton.style.border = 'none';
+        stopButton.style.borderRadius = '4px';
+        stopButton.style.cursor = 'pointer';
+        stopButton.style.display = 'none';
+        startButton.addEventListener('click', startBatchProcess);
+        stopButton.addEventListener('click', function () { stopRequested = true; });
+        root.appendChild(keywordButton);
+        root.appendChild(divider);
+        var label = document.createElement('span');
+        label.textContent = 'Check limit:';
+        label.style.fontSize = '12px';
+        root.appendChild(label);
+        root.appendChild(limitInput);
+        root.appendChild(startButton);
+        root.appendChild(stopButton);
+    }
+    function buildFolderPanel(root) {
+        root.style.width = '260px';
+        var prefixLabel = document.createElement('span');
+        prefixLabel.textContent = '① 日期前缀（每天改这里）:';
+        prefixLabel.style.fontSize = '12px';
+        prefixLabel.style.fontWeight = 'bold';
+        folderPrefixInput = document.createElement('input');
+        folderPrefixInput.type = 'text';
+        folderPrefixInput.placeholder = '例如 0708';
+        folderPrefixInput.style.padding = '6px';
+        folderPrefixInput.style.border = '1px solid #ccc';
+        folderPrefixInput.style.borderRadius = '4px';
+        try { folderPrefixInput.value = localStorage.getItem('nox-folder-prefix') || ''; } catch (e) {}
+        folderPrefixInput.addEventListener('input', function () {
+            try { localStorage.setItem('nox-folder-prefix', folderPrefixInput.value); } catch (e) {}
+        });
+        var codesLabel = document.createElement('span');
+        codesLabel.innerHTML = '② 编号列表（每行一个，很少改）:<br><span style="font-weight:normal;color:#888;font-size:11px;">格式: 编号 &gt; 协作者1, 协作者2<br>不写协作者=私有</span>';
+        codesLabel.style.fontSize = '12px';
+        codesLabel.style.fontWeight = 'bold';
+        folderCodesInput = document.createElement('textarea');
+        folderCodesInput.rows = 8;
+        folderCodesInput.placeholder = '1 > Renli\n9 > leta\nm-1\nm-E1 > Renli, leta';
+        folderCodesInput.style.padding = '6px';
+        folderCodesInput.style.border = '1px solid #ccc';
+        folderCodesInput.style.borderRadius = '4px';
+        folderCodesInput.style.fontFamily = 'monospace';
+        folderCodesInput.style.fontSize = '12px';
+        folderCodesInput.style.resize = 'vertical';
+        folderCodesInput.value = getSavedCodes();
+        folderCodesInput.addEventListener('input', function () { saveCodes(folderCodesInput.value); });
+        var previewBtn = document.createElement('button');
+        previewBtn.textContent = '预览要建的名字';
+        previewBtn.style.padding = '6px';
+        previewBtn.style.backgroundColor = '#607d8b';
+        previewBtn.style.color = 'white';
+        previewBtn.style.border = 'none';
+        previewBtn.style.borderRadius = '4px';
+        previewBtn.style.cursor = 'pointer';
+        previewBtn.style.fontSize = '12px';
+        previewBtn.addEventListener('click', function () {
+            var prefix = (folderPrefixInput.value || '').trim();
+            if (!prefix) { alert('请先输入日期前缀'); return; }
+            var lines = (folderCodesInput.value || '').split('\n').map(parseCodeLine).filter(Boolean);
+            if (!lines.length) { alert('编号列表是空的'); return; }
+            var preview = lines.map(function (l) {
+                var s = prefix + '-' + l.code;
+                if (l.collaborators.length) s += '   → ' + l.collaborators.join(', ');
+                else s += '   → 私有';
+                return s;
+            }).join('\n');
+            alert('共 ' + lines.length + ' 个：\n\n' + preview);
+        });
+        folderCreateBtn = document.createElement('button');
+        folderCreateBtn.textContent = '开始批量创建';
+        folderCreateBtn.style.padding = '10px';
+        folderCreateBtn.style.backgroundColor = '#ff6a00';
+        folderCreateBtn.style.color = 'white';
+        folderCreateBtn.style.border = 'none';
+        folderCreateBtn.style.borderRadius = '4px';
+        folderCreateBtn.style.cursor = 'pointer';
+        folderCreateBtn.style.fontWeight = 'bold';
+        folderCreateBtn.addEventListener('click', runCreateFolders);
+        folderStopBtn = document.createElement('button');
+        folderStopBtn.textContent = '停止';
+        folderStopBtn.style.padding = '8px';
+        folderStopBtn.style.backgroundColor = '#f44336';
+        folderStopBtn.style.color = 'white';
+        folderStopBtn.style.border = 'none';
+        folderStopBtn.style.borderRadius = '4px';
+        folderStopBtn.style.cursor = 'pointer';
+        folderStopBtn.style.display = 'none';
+        folderStopBtn.addEventListener('click', function () { folderStopRequested = true; });
+        root.appendChild(prefixLabel);
+        root.appendChild(folderPrefixInput);
+        root.appendChild(codesLabel);
+        root.appendChild(folderCodesInput);
+        root.appendChild(previewBtn);
+        root.appendChild(folderCreateBtn);
+        root.appendChild(folderStopBtn);
+    }
+    // ==================== EMAIL PROJECT AUTOMATION ====================
+    var emailRunning = false;
+    var emailDateInput, emailCodeInput, emailStatusEl;
+    function setEmailStatus(s) { if (emailStatusEl) emailStatusEl.textContent = s; }
+    function getEmailCodeMap() {
+        var map = {};
+        var raw = getSavedCodes();
+        raw.split('\n').forEach(function (line) {
+            line = line.trim();
+            if (!line) return;
+            var code = line, name = '';
+            var gt = line.indexOf('>');
+            if (gt !== -1) { code = line.slice(0, gt).trim(); name = line.slice(gt + 1).trim().split(/[,，]/)[0].trim(); }
+            if (code) map[code] = name;
+        });
+        return map;
+    }
+    function computeEmailNames(dateStr, code) {
+        var person = getEmailCodeMap()[code] || '';
+        return {
+            folderName: dateStr + '-' + code,
+            projectName: person ? (dateStr + '-' + person + '-' + code) : (dateStr + '-' + code),
+            person: person
+        };
+    }
+    async function emailWaitFor(fn, timeout) {
+        timeout = timeout || 10000;
+        var start = Date.now();
+        while (Date.now() - start < timeout) {
+            var v = fn();
+            if (v) return v;
+            await sleepPlain(200);
+        }
+        return null;
+    }
+    function emailClickByText(root, texts, sel) {
+        sel = sel || 'button, .kol-btn, [class*="btn"], div, span, li, label';
+        var els = root.querySelectorAll(sel);
+        for (var i = 0; i < els.length; i++) {
+            if (!isElementVisible(els[i])) continue;
+            var t = (els[i].textContent || '').replace(/\s/g, '');
+            for (var j = 0; j < texts.length; j++) {
+                if (t === texts[j] || t.indexOf(texts[j]) !== -1) { els[i].click(); return els[i]; }
+            }
+        }
+        return null;
+    }
+    function emailIsListPage() { return location.href.indexOf('/project-list') !== -1; }
+    function emailIsEditPage() { return location.href.indexOf('/detail-edit') !== -1; }
+    function emailGetCreateDialog() {
+        var ds = document.querySelectorAll('.email-create-edit, .el-dialog__wrapper');
+        for (var i = 0; i < ds.length; i++) {
+            if (!isElementVisible(ds[i])) continue;
+            if (ds[i].querySelector('.project-email')) return ds[i];
+            var t = ds[i].textContent || '';
+            if (t.indexOf('创建邮件项目') !== -1 && t.indexOf('发件人') !== -1) return ds[i];
+        }
+        return null;
+    }
+    function emailSetProjectName(dialog, name) {
+        var input = dialog.querySelector('.project-email input') || dialog.querySelector('.el-input__inner');
+        if (!input) return false;
+        input.focus();
+        kwSetter.call(input, name);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    }
+    async function emailPickFirstSender(dialog) {
+        var trigger = dialog.querySelector('.sender-select-trigger') || dialog.querySelector('.sender-dropdown');
+        if (!trigger) return false;
+        trigger.click();
+        await sleepPlain(700);
+        var menu = document.querySelector('.sender-type-panel') || document.querySelector('.el-dropdown-menu.el-popper');
+        if (!menu) return false;
+        var labels = menu.querySelectorAll('label.el-radio, .el-radio');
+        if (labels.length && isElementVisible(labels[0])) { labels[0].click(); return true; }
+        return false;
+    }
+    function emailConfirmCreate(dialog) {
+        return emailClickByText(dialog, ['确定', '确认'], '.el-dialog__footer button, .el-dialog__footer .kol-btn, button, .kol-btn');
+    }
+    async function emailCreateProject(names) {
+        var massBtn = null;
+        var scoped = document.querySelector('.email-header .btn-group .kol-btn.primary');
+        if (scoped && isElementVisible(scoped) && (scoped.textContent || '').indexOf('群发邮件') !== -1) massBtn = scoped;
+        if (!massBtn) {
+            var all = document.querySelectorAll('.kol-btn.primary, .kol-btn, button, [class*="btn"]');
+            for (var i = 0; i < all.length; i++) {
+                var t = (all[i].textContent || '').replace(/\s/g, '');
+                if (t.indexOf('群发邮件') !== -1 && isElementVisible(all[i])) { massBtn = all[i]; break; }
+            }
+        }
+        if (!massBtn) return { ok: false, reason: '找不到"群发邮件"按钮' };
+        massBtn.click();
+        await sleepPlain(800);
+        var dialog = await emailWaitFor(emailGetCreateDialog, 12000);
+        if (!dialog) return { ok: false, reason: '创建弹窗没出现' };
+        await sleepPlain(500);
+        if (!emailSetProjectName(dialog, names.projectName)) return { ok: false, reason: '找不到项目名输入框' };
+        await sleepPlain(400);
+        var senderOk = await emailPickFirstSender(dialog);
+        await sleepPlain(500);
+        if (!emailConfirmCreate(dialog)) return { ok: false, reason: '找不到确定按钮' };
+        return { ok: true, senderOk: senderOk };
+    }
+    function emailClickAddRecipient() {
+        var spans = document.querySelectorAll('.form-item .value, span.value, .detail-header-container span');
+        for (var i = 0; i < spans.length; i++) {
+            var el = spans[i];
+            if (!isElementVisible(el)) continue;
+            var txt = (el.textContent || '').replace(/\s/g, '');
+            if (txt.indexOf('添加收件人') !== -1 && txt.indexOf('添加抄送') === -1) {
+                var icon = el.querySelector('.kol-icon-add-circle, i.kolicon');
+                (icon || el).click();
+                return true;
+            }
+        }
+        return false;
+    }
+    function emailGetSourceDialog() {
+        var ds = document.querySelectorAll('.email-recipient-dialogs, .el-dialog__wrapper');
+        for (var i = 0; i < ds.length; i++) {
+            if (isElementVisible(ds[i]) && ds[i].querySelector('.option-list')) return ds[i];
+        }
+        return null;
+    }
+    function emailClickFolderSource(dialog) {
+        var items = dialog.querySelectorAll('.option-list .option-item');
+        for (var i = 0; i < items.length; i++) {
+            if ((items[i].textContent || '').indexOf('收藏夹') !== -1 && isElementVisible(items[i])) { items[i].click(); return true; }
+        }
+        if (items.length && isElementVisible(items[0])) { items[0].click(); return true; }
+        return false;
+    }
+    function emailGetFolderPanel() {
+        var ds = document.querySelectorAll('.email-recipient-dialogs, .el-dialog__wrapper, [class*="dialog"]');
+        for (var i = 0; i < ds.length; i++) {
+            if (isElementVisible(ds[i]) && (ds[i].textContent || '').indexOf('一键添加') !== -1) return ds[i];
+        }
+        return null;
+    }
+    async function emailPickFolderInPanel(panel, folderName) {
+        var select = panel.querySelector('.resource-add-header .el-select') || panel.querySelector('.el-select');
+        if (select) { select.click(); await sleepPlain(1000); }
+        var want = folderName.trim();
+        function getDropdown() {
+            return document.querySelector('.simple-resource-list .el-scrollbar__wrap') ||
+                   document.querySelector('.simple-resource-list') ||
+                   document.querySelector('.el-select-dropdown .el-scrollbar__wrap');
+        }
+        function findItem() {
+            var items = document.querySelectorAll('.simple-resource-list .el-select-dropdown__item, .el-select-dropdown__item.option-item, .el-select-dropdown__item');
+            for (var i = 0; i < items.length; i++) {
+                if ((items[i].textContent || '').trim() === want && isElementVisible(items[i])) return items[i];
+            }
+            return null;
+        }
+        var scroller = getDropdown();
+        var lastScrollTop = -1;
+        for (var attempt = 0; attempt < 40; attempt++) {
+            var hit = findItem();
+            if (hit) { hit.click(); return true; }
+            scroller = scroller || getDropdown();
+            if (scroller) {
+                scroller.scrollTop = scroller.scrollTop + 300;
+                if (scroller.scrollTop === lastScrollTop) await sleepPlain(500);
+                lastScrollTop = scroller.scrollTop;
+            }
+            await sleepPlain(400);
+        }
+        return false;
+    }
+    function emailClickOneKeyAdd(panel) {
+        var btns = panel.querySelectorAll('.table-footer button, .left-option button, button, .kol-btn');
+        for (var i = 0; i < btns.length; i++) {
+            var b = btns[i];
+            if (!isElementVisible(b)) continue;
+            if (b.disabled || b.classList.contains('disabled-btn') || b.classList.contains('is-disabled')) continue;
+            var t = (b.textContent || '').replace(/\s/g, '');
+            if (t.indexOf('一键添加') !== -1) { b.click(); return true; }
+        }
+        return false;
+    }
+    async function emailAddRecipients(names) {
+        if (!emailGetFolderPanel()) {
+            if (!emailGetSourceDialog()) {
+                if (!emailClickAddRecipient()) return { ok: false, reason: '找不到"添加收件人"' };
+                await sleepPlain(1500);
+            }
+            var src = await emailWaitFor(emailGetSourceDialog, 8000);
+            if (!src) return { ok: false, reason: '收件人来源弹窗没出现' };
+            await sleepPlain(400);
+            if (!emailClickFolderSource(src)) return { ok: false, reason: '找不到"收藏夹"入口' };
+            await sleepPlain(1500);
+        }
+        var panel = await emailWaitFor(emailGetFolderPanel, 8000);
+        if (!panel) return { ok: false, reason: '收藏夹面板没出现' };
+        var picked = await emailPickFolderInPanel(panel, names.folderName);
+        if (!picked) return { ok: false, reason: '收藏夹下拉里没找到"' + names.folderName + '"' };
+        await sleepPlain(1500);
+        var platforms = panel.querySelectorAll('.switch-operation .switch-item');
+        if (!platforms.length) platforms = document.querySelectorAll('.switch-operation .switch-item');
+        if (platforms.length) {
+            for (var p = 0; p < platforms.length; p++) {
+                var acc = platforms[p].querySelector('.account');
+                var count = acc ? parseInt((acc.textContent || '0').replace(/[^0-9]/g, ''), 10) : 0;
+                if (count > 0) {
+                    platforms[p].click();
+                    await sleepPlain(1500);
+                    break;
+                }
+            }
+        }
+        if (!emailClickOneKeyAdd(panel)) return { ok: false, reason: '找不到可点的"一键添加"（可能收藏夹为空）' };
+        return { ok: true };
+    }
+    async function runEmailFlow(dateStr, code) {
+        if (emailRunning) return;
+        try { localStorage.setItem('nox-folder-prefix', dateStr); } catch (e) {}
+        try { localStorage.setItem('nox-email-code', code); } catch (e) {}
+        emailRunning = true;
+        setEmailStatus('运行中…');
+        try {
+            var names = computeEmailNames(dateStr, code);
+            if (emailIsListPage()) {
+                setEmailStatus('建项目 ' + names.projectName + ' …');
+                var r1 = await emailCreateProject(names);
+                if (!r1.ok) { alert('建项目失败：' + r1.reason); return; }
+                setEmailStatus('等待进入编辑页…');
+                var arrived = await emailWaitFor(function () { return emailIsEditPage() ? true : null; }, 12000);
+                if (!arrived) { alert('项目已建，但没自动跳转编辑页。进入该项目后再点一次按钮即可加收件人。'); return; }
+                await sleepPlain(1500);
+            }
+            if (emailIsEditPage()) {
+                setEmailStatus('添加收件人：' + names.folderName + ' …');
+                var r2 = await emailAddRecipients(names);
+                if (!r2.ok) { alert('加收件人失败：' + r2.reason); return; }
+                setEmailStatus('✅ 完成：' + names.projectName + ' / ' + names.folderName);
+            } else {
+                alert('当前不在列表页也不在编辑页，请到"邮件邀约"页。');
+            }
+        } catch (e) {
+            alert('出错：' + (e && e.message));
+        } finally {
+            emailRunning = false;
+        }
+    }
+    function computeNextDayMidnight(dateStr) {
+        var mmdd = (dateStr || '').replace(/[^0-9]/g, '');
+        if (mmdd.length < 3) return null;
+        var mm, dd;
+        if (mmdd.length === 3) { mm = mmdd.slice(0, 1); dd = mmdd.slice(1); }
+        else { mm = mmdd.slice(0, 2); dd = mmdd.slice(2, 4); }
+        var year = new Date().getFullYear();
+        var d = new Date(year, parseInt(mm, 10) - 1, parseInt(dd, 10), 0, 0, 0);
+        d.setDate(d.getDate() + 1);
+        var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' 00:00:00';
+    }
+    function getScheduleDialog() {
+        var ds = document.querySelectorAll('.set-time-send, .el-dialog__wrapper');
+        for (var i = 0; i < ds.length; i++) {
+            if (isElementVisible(ds[i]) && (ds[i].textContent || '').indexOf('发送时间') !== -1) return ds[i];
+        }
+        return null;
+    }
+    async function runScheduleSend(dateStr) {
+        var when = computeNextDayMidnight(dateStr);
+        if (!when) { alert('日期前缀无效，无法计算发送时间'); return; }
+        var setBtn = null;
+        var btns = document.querySelectorAll('.set-time, .kol-btn, [class*="btn"]');
+        for (var i = 0; i < btns.length; i++) {
+            if ((btns[i].textContent || '').replace(/\s/g, '').indexOf('设置定时') !== -1 && isElementVisible(btns[i])) { setBtn = btns[i]; break; }
+        }
+        if (!setBtn) { alert('找不到"设置定时"按钮'); return; }
+        setBtn.click();
+        await sleepPlain(800);
+        var dialog = await emailWaitFor(getScheduleDialog, 6000);
+        if (!dialog) { alert('设置定时弹窗没出现'); return; }
+        var input = dialog.querySelector('.date-time-select input') || dialog.querySelector('.el-date-editor input') || dialog.querySelector('input.el-input__inner');
+        if (!input) { alert('找不到发送时间输入框'); return; }
+        input.focus();
+        input.click();
+        await sleepPlain(400);
+        kwSetter.call(input, when);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleepPlain(300);
+        ['keydown', 'keyup'].forEach(function (t) {
+            input.dispatchEvent(new KeyboardEvent(t, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+        });
+        await sleepPlain(600);
+        input.dispatchEvent(new Event('blur', { bubbles: true }));
+        await sleepPlain(400);
+        var okBtn = null;
+        var footerBtns = dialog.querySelectorAll('.dialog-footer .kol-btn, .el-dialog__footer .kol-btn, .kol-btn, button');
+        for (var j = 0; j < footerBtns.length; j++) {
+            if (!isElementVisible(footerBtns[j])) continue;
+            var t = (footerBtns[j].textContent || '').replace(/\s/g, '');
+            if (t === '确定' || t === '确认') { okBtn = footerBtns[j]; break; }
+        }
+        if (!okBtn) { alert('填好了时间 ' + when + '，但没找到弹窗"确定"，请手动点。'); return; }
+        okBtn.click();
+        setEmailStatus('⏰ 已设定时：' + when + '，等待发送确认…');
+        var diagBtn = null;
+        var startWait = Date.now();
+        while (Date.now() - startWait < 20000) {
+            var cand = document.querySelectorAll('.email-send-quota .kol-btn, .dialog-footer button, .el-dialog__footer button, button, .kol-btn');
+            for (var d = 0; d < cand.length; d++) {
+                if (!isElementVisible(cand[d])) continue;
+                var tt = (cand[d].textContent || '').replace(/\s/g, '');
+                if (tt.indexOf('忽略继续发送') !== -1 || tt.indexOf('继续发送') !== -1) { diagBtn = cand[d]; break; }
+            }
+            if (diagBtn) break;
+            await sleepPlain(500);
+        }
+        if (!diagBtn) {
+            setEmailStatus('⏰ 已设定时 ' + when + '。发送确认框未出现，请手动点"忽略继续发送"。');
+            return;
+        }
+        await sleepPlain(300);
+        diagBtn.click();
+        setEmailStatus('✅ 已定时发送：' + when);
+    }
+    function buildEmailPanel(root) {
+        root.style.width = '230px';
+        var dLbl = document.createElement('span');
+        dLbl.textContent = '日期前缀:';
+        dLbl.style.cssText = 'font-size:12px;font-weight:bold;';
+        emailDateInput = document.createElement('input');
+        emailDateInput.type = 'text';
+        emailDateInput.placeholder = '例如 0720';
+        emailDateInput.style.cssText = 'padding:6px;border:1px solid #ccc;border-radius:4px;';
+        try { emailDateInput.value = localStorage.getItem('nox-folder-prefix') || ''; } catch (e) {}
+        emailDateInput.addEventListener('input', function () {
+            try { localStorage.setItem('nox-folder-prefix', emailDateInput.value); } catch (e) {}
+        });
+        var cLbl = document.createElement('span');
+        cLbl.textContent = '编号 (查表得人名):';
+        cLbl.style.cssText = 'font-size:12px;font-weight:bold;';
+        emailCodeInput = document.createElement('input');
+        emailCodeInput.type = 'text';
+        emailCodeInput.placeholder = '例如 1 或 m-K1';
+        emailCodeInput.style.cssText = 'padding:6px;border:1px solid #ccc;border-radius:4px;';
+        try { emailCodeInput.value = localStorage.getItem('nox-email-code') || ''; } catch (e) {}
+        emailCodeInput.addEventListener('input', function () {
+            try { localStorage.setItem('nox-email-code', emailCodeInput.value); } catch (e) {}
+        });
+        var prev = document.createElement('button');
+        prev.textContent = '预览项目名/收藏夹名';
+        prev.style.cssText = 'padding:6px;background:#607d8b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;';
+        prev.addEventListener('click', function () {
+            var d = (emailDateInput.value || '').trim(), c = (emailCodeInput.value || '').trim();
+            if (!d || !c) { alert('请填日期和编号'); return; }
+            var n = computeEmailNames(d, c);
+            alert('项目名: ' + n.projectName + '\n收藏夹名: ' + n.folderName + '\n人名: ' + (n.person || '无(用编号)'));
+        });
+        var runBtn = document.createElement('button');
+        runBtn.textContent = '🚀 一键：建项目+加收件人';
+        runBtn.style.cssText = 'padding:11px;background:#ff6a00;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:bold;font-size:13px;';
+        runBtn.addEventListener('click', function () {
+            var d = (emailDateInput.value || '').trim(), c = (emailCodeInput.value || '').trim();
+            if (!d || !c) { alert('请填日期和编号'); return; }
+            runEmailFlow(d, c);
+        });
+        var schedBtn = document.createElement('button');
+        schedBtn.textContent = '⏰ 设置次日零点定时';
+        schedBtn.style.cssText = 'padding:9px;background:#8e44ad;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:bold;font-size:12px;';
+        schedBtn.addEventListener('click', function () {
+            var d = (emailDateInput.value || '').trim();
+            if (!d) { alert('请先填日期前缀'); return; }
+            runScheduleSend(d);
+        });
+        emailStatusEl = document.createElement('div');
+        emailStatusEl.style.cssText = 'font-size:11px;color:#4CAF50;text-align:center;min-height:14px;';
+        var hint = document.createElement('div');
+        hint.style.cssText = 'font-size:11px;color:#888;line-height:1.4;';
+        hint.textContent = '编号列表与"创建收藏夹"共用，改一处即可。在列表页点一次跑完；若没跳转，进项目后再点一次接着加收件人。';
+        root.appendChild(dLbl); root.appendChild(emailDateInput);
+        root.appendChild(cLbl); root.appendChild(emailCodeInput);
+        root.appendChild(prev);
+        root.appendChild(runBtn);
+        root.appendChild(schedBtn);
+        root.appendChild(emailStatusEl);
+        root.appendChild(hint);
+    }
+    // ==================== CRM PAGE: filter 建联中 + select-all across pages ====================
+    var crmRunning = false, crmStop = false, crmTotal = 0, crmLimit = 1000;
+    var crmStartBtn, crmStopBtn, crmLimitInput, crmStatusEl;
+    // 按可见文字找元素：只返回“叶子级”命中（即候选元素内部不再包含另一个同样精确匹配的候选），
+    // 这样点击的一定是真正绑定了点击事件的最内层节点，而不是外层的包裹 div/span。
+    // 之前的版本用 children.length<=2 这种启发式来避免命中外层容器，但像 Nox 页面里
+    // “<div class="search-filter-wrap"><div class="kol-btn filter-btn">...高级筛选</div></div>”
+    // 这种结构外层只包了一个按钮，children.length===1，会被误判成“叶子”，先被点击，
+    // 导致真正绑定 @click 的内层 .kol-btn 从未被点到（事件冒泡只会向上，不会向下传导）。
+    function findByText(text, tags) {
+        tags = tags || ['button', 'span', 'div', 'li', 'a', 'label'];
+        var sel = tags.join(',');
+        var nodes = document.querySelectorAll(sel);
+        function collect(matchFn) {
+            var candidates = [];
+            for (var i = 0; i < nodes.length; i++) {
+                var el = nodes[i];
+                if (!isElementVisible(el)) continue;
+                var txt = (el.textContent || '').trim();
+                if (matchFn(txt)) candidates.push(el);
+            }
+            // 只保留叶子级:一个候选如果内部包含另一个候选,就把它自己排除(它是外层容器)
+            var leaves = candidates.filter(function (el) {
+                for (var j = 0; j < candidates.length; j++) {
+                    if (candidates[j] !== el && el.contains(candidates[j])) return false;
+                }
+                return true;
+            });
+            return leaves.length ? leaves[0] : null;
+        }
+        // 第一轮:精确匹配
+        var exact = collect(function (txt) { return txt === text; });
+        if (exact) return exact;
+        // 第二轮:放宽为包含
+        var loose = collect(function (txt) { return txt.indexOf(text) !== -1; });
+        return loose;
+    }
+    function clickReal(el) {
+        if (!el) return false;
+        ['mousedown', 'mouseup', 'click'].forEach(function (t) {
+            el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+        });
+        return true;
+    }
+    function setCrmStatus(t) { if (crmStatusEl) crmStatusEl.textContent = t; console.log('[CRM] ' + t); }
+    function getCrmSelectAll() {
+        var head = document.querySelector('thead .el-checkbox__input, .el-table__header .el-checkbox__input');
+        if (head && isElementVisible(head)) return head;
+        var all = document.querySelectorAll('.el-checkbox__input');
+        for (var i = 0; i < all.length; i++) { if (isElementVisible(all[i])) return all[i]; }
+        return null;
+    }
+    function countCrmChecked() {
+        return document.querySelectorAll('.el-table__body .el-checkbox__input.is-checked, tbody .el-checkbox__input.is-checked').length;
+    }
+    // 读取网站顶部那个权威计数“已选500个网红”。这是跨页累计的真实值,
+    // 比自己一页页累加可靠得多(el-table 有固定列时每行 DOM 会渲染两遍,自己数会翻倍)。
+    // 读不到就返回 null,让调用方回退到旧的累加逻辑。
+    function readCrmSelectedCount() {
+        var nodes = document.querySelectorAll('span, div, b, em, strong');
+        for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            // 只看没有子元素的叶子节点,避免把父容器的一大段文字也匹配进来
+            if (el.children && el.children.length > 0) continue;
+            var m = (el.textContent || '').match(/已选\s*(\d+)\s*个网红/);
+            if (m) return parseInt(m[1], 10);
+        }
+        // 兜底:整页文本里搜一次(某些主题会把数字拆进子 span)
+        var m2 = (document.body.innerText || '').match(/已选\s*(\d+)\s*个网红/);
+        return m2 ? parseInt(m2[1], 10) : null;
+    }
+    // 当前表格里有多少数据行(用来判断筛选后是否为空)。排除空态占位行。
+    function countCrmRows() {
+        var rows = document.querySelectorAll('.el-table__body-wrapper tbody tr.el-table__row');
+        if (rows.length) return rows.length;
+        return document.querySelectorAll('.el-table__body-wrapper tbody tr').length;
+    }
+    // 等待某个条件成立(用于替代“点了就假设生效”的写法),避免筛选面板/下拉还没渲染完就点确定
+    async function waitUntil(fn, timeout, interval) {
+        timeout = timeout || 8000; interval = interval || 300;
+        var start = Date.now();
+        while (Date.now() - start < timeout) {
+            if (crmStop) throw new Error('stopped');
+            var v = fn();
+            if (v) return v;
+            await sleep(interval);
+        }
+        return null;
+    }
+    // 找到"团队联系状态"的复选框下拉面板本身(而不是页面上任何写着同名文字的地方,
+    // 比如表格里某一行的状态列也会显示"建联中"这几个字,如果不限定范围很容易点错)。
+    // 从截图确认到的真实结构是: .el-select-dropdown.is-multiple.check-select-dropdown.crm-drawer-filter-pop
+    // 每个选项是 li.el-select-dropdown__item > div.check-select-option > (span.el_check_box + span.el_check_text)
+    // optionText: 期望这个下拉面板里含有的选项文字(比如“建联中”)。
+    // 页面上可能同时存在多个多选下拉面板(不同筛选字段各有一个),只靠“可见”会拿到错的那个,
+    // 于是后面就在错误的面板里找不到/点错选项。这里要求面板里真的含有目标选项才算命中,
+    // 从根上避免“选到别的地方”。传空时退回旧的“第一个可见面板”行为(兼容调用方)。
+    function getCheckSelectDropdown(optionText) {
+        var ds = document.querySelectorAll('.el-select-dropdown.is-multiple, .check-select-dropdown, [class*="crm-drawer-filter-pop"]');
+        var firstVisible = null;
+        for (var i = 0; i < ds.length; i++) {
+            if (!isElementVisible(ds[i])) continue;
+            if (!firstVisible) firstVisible = ds[i];
+            if (!optionText) return ds[i];
+            if (findCheckOption(ds[i], optionText)) return ds[i];
+        }
+        return optionText ? null : firstVisible;
+    }
+    // 在下拉面板范围内(不是全页面)按选项文字找到对应的 li,并返回该 li 内真正可点击的复选框行(div.check-select-option),
+    // 避免点到外层 li 或内层文字 span 导致点击目标错位。
+    function findCheckOption(dropdown, text) {
+        var items = dropdown.querySelectorAll('li.el-select-dropdown__item, .el-select-dropdown__item');
+        for (var i = 0; i < items.length; i++) {
+            var textSpan = items[i].querySelector('.el_check_text');
+            var label = textSpan ? textSpan.textContent.trim() : items[i].textContent.trim();
+            if (label === text && isElementVisible(items[i])) {
+                return items[i].querySelector('.check-select-option') || items[i];
+            }
+        }
+        return null;
+    }
+    // 判断“建联中”这类自定义复选项是否已勾选。这个页面不是标准 el-checkbox,选中标记可能出现在
+    // li(.selected)、复选框 span(.el_check_box 上的 is-checked/checked/is-active),或框里多出一个对勾图标。
+    // 之前只认 .is-checked / li.selected,一旦实际用的是别的类名就会“误判成没勾上”,进而触发二次点击
+    // 把已勾选的又切回去,最终筛选为空、选 0 人。这里把常见的几种选中信号都覆盖上。
+    function isOptionChecked(optionEl) {
+        if (!optionEl) return false;
+        var li = optionEl.closest('li') || optionEl;
+        // DevTools 确认:选中时 li 加 class="selected",且 .el_check_box 里出现打勾图标 i.kol-icon-checkmark
+        if (li.classList.contains('selected')) return true;
+        if (li.getAttribute('aria-selected') === 'true') return true;
+        if (li.querySelector('.kol-icon-checkmark, .is-checked, .checked, .is-active')) return true;
+        var box = li.querySelector('.el_check_box');
+        if (box) {
+            if (/(^|\s)(is-checked|checked|is-active|active)(\s|$)/i.test(box.className)) return true;
+            // 选中时复选框里会多出一个对勾图标(i.kolicon.kol-icon-checkmark / svg / 其它 icon)
+            if (box.querySelector('svg, i, .icon, [class*="icon"], [class*="tick"], [class*="check"]')) return true;
+        }
+        return false;
+    }
+    // "团队联系状态"只是字段的文字标题,不是可点击的下拉触发器——真正能打开下拉框的是
+    // 标题旁边/下方的选择框(el-select 组件,显示"全部"字样)。之前的版本直接点标题文字,
+    // 标题上没有绑定任何 Vue 点击事件,所以下拉框永远不会打开,后面所有步骤都会超时失败。
+    // 这里改成:先定位标题文字,再往上找到它和选择框共同的父容器,在容器内找真正的
+    // .el-select 触发器来点击。逐级往上最多找 5 层,避免因为不确定的 DOM 层级结构而找不到。
+    // 高级筛选面板是两列网格,每个字段的下拉框(el-select,显示“全部”)就正好在它标题文字的
+    // 正下方。之前用“父容器里第一个 el-select”或“文档顺序上紧跟的 el-select”都不可靠:一旦
+    // DOM 顺序或容器嵌套跟视觉排布不一致,就会串到相邻字段(实测点成了左列的“对接人”,弹出的是
+    // 邮箱列表)。这里改成照着屏幕坐标来——只认标题正下方、横向对齐、且离得最近的那个 el-select,
+    // 从几何位置上杜绝“选到别的地方”。
+    function findFilterSelectTrigger(labelText) {
+        // 首选:按真实 DOM 结构定位(靠 DevTools 确认过)。每个筛选字段是
+        //   div.filter-item > p.filter-name(字段标题) + div.filter-item-check-wrap > div.el-select(真正的触发器)
+        // 只要标题文字对上,就在同一个 .filter-item 里取 .el-select,几何位置怎么排都不会串到隔壁字段。
+        var names = document.querySelectorAll('p.filter-name, .filter-name');
+        for (var n = 0; n < names.length; n++) {
+            if ((names[n].textContent || '').trim() !== labelText) continue;
+            var item = names[n].closest('.filter-item') || names[n].parentElement;
+            if (!item) continue;
+            var sel = item.querySelector('.el-select');
+            if (sel && isElementVisible(sel)) {
+                return sel.querySelector('.el-input__inner') || sel.querySelector('.el-select__tags') || sel;
+            }
+        }
+        // 兜底:老的几何定位(标题正下方、横向对齐、最近的 el-select),以防上面的类名将来变了。
+        var label = findByText(labelText, ['span', 'div', 'label', 'p']);
+        if (!label) return null;
+        var lr = label.getBoundingClientRect();
+        var selects = document.querySelectorAll('.el-select');
+        var best = null, bestGap = Infinity;
+        for (var i = 0; i < selects.length; i++) {
+            var s = selects[i];
+            if (!isElementVisible(s) || label.contains(s) || s.contains(label)) continue;
+            var sr = s.getBoundingClientRect();
+            // 必须在标题下方(允许少量重叠余量),且与标题横向有重叠(同一列)
+            var below = sr.top >= lr.top - 4;
+            var horizontallyAligned = sr.left < lr.right && sr.right > lr.left;
+            if (!below || !horizontallyAligned) continue;
+            var gap = sr.top - lr.bottom;
+            if (gap < -lr.height) continue; // 排除跑到标题上方太多的
+            if (gap < bestGap) { bestGap = gap; best = s; }
+        }
+        if (best) return best.querySelector('.el-input__inner') || best;
+        return null;
+    }
+    // 一次性的筛选流程:高级筛选 → 团队联系状态 → 建联中 → 确定
+    async function crmApplyFilter() {
+        setCrmStatus('点开 高级筛选…');
+        var adv = findByText('高级筛选', ['div', 'span', 'button']);
+        if (!clickReal(adv)) { setCrmStatus('找不到 高级筛选按钮'); return false; }
+        // 等"团队联系状态"这个筛选字段出现(在筛选面板里,而不是下拉弹窗)
+        var panelOpen = await waitUntil(function () { return findByText('团队联系状态', ['span', 'div', 'label', 'li']); }, 6000);
+        if (!panelOpen) { setCrmStatus('高级筛选面板没展开,请检查是否已点开'); return false; }
+        await sleep(400);
+        setCrmStatus('打开 团队联系状态 下拉框…');
+        var trigger = await waitUntil(function () { return findFilterSelectTrigger('团队联系状态'); }, 4000);
+        if (!trigger) { setCrmStatus('找不到 团队联系状态 的下拉触发器'); return false; }
+        clickReal(trigger);
+        await sleep(500);
+        // 等待"团队联系状态"对应的复选框下拉面板真正打开(靠 class 特征定位,不是靠文字),
+        // 这样才能确保下一步点的是弹窗里的选项,而不是页面上表格里同名的状态文字。
+        setCrmStatus('等待状态选项面板打开…');
+        // 要求面板里真的含有“建联中”这个选项才算命中,避免误认成别的字段的下拉面板
+        var dropdown = await waitUntil(function () { return getCheckSelectDropdown('建联中'); }, 6000);
+        if (!dropdown) {
+            // 有些情况下第一次点击没能触发下拉(比如动画/焦点问题),再点一次触发器重试
+            clickReal(trigger);
+            await sleep(500);
+            dropdown = await waitUntil(function () { return getCheckSelectDropdown('建联中'); }, 4000);
+        }
+        if (!dropdown) { setCrmStatus('状态下拉面板没出现'); return false; }
+        await sleep(300);
+        setCrmStatus('选择 建联中…');
+        var lianjieOption = await waitUntil(function () { return findCheckOption(dropdown, '建联中'); }, 6000);
+        if (!lianjieOption) { setCrmStatus('下拉面板里没找到 建联中选项'); return false; }
+        // 关键教训:这个选项是“开关”,点一次勾上、再点一次取消。之前版本会在“选中检测”失灵时盲目补点,
+        // 把刚勾上的又切回去,最终筛选为空、选 0 人。而选中后 DOM 到底加什么标记并不确定,检测本身不可靠。
+        // 好在下拉面板每次打开都是全空的(起点必为“未选”),所以最稳的做法是:无条件只点一次 = 选中,
+        // 之后的检测只用来“判断是否成功并提示”,绝不拿检测结果去决定要不要再点,从根上杜绝反复横跳。
+        clickReal(lianjieOption);
+        await sleep(600);
+        var okChecked = isOptionChecked(findCheckOption(dropdown, '建联中'));
+        if (!okChecked) {
+            // 检测显示没选中——但检测可能不准。只在“确实还没选中”时补一次,且补完再看一眼;
+            // 若两次点击后仍判定未选,大概率是检测识别不了这个页面的选中标记,此时不再强行判定失败,
+            // 而是继续走后面的“确定”,由最终结果的行数来说明是否真的筛出了数据。
+            clickReal(findCheckOption(dropdown, '建联中'));
+            await sleep(600);
+            okChecked = isOptionChecked(findCheckOption(dropdown, '建联中'));
+            if (!okChecked) {
+                // 兜底:把状态恢复成“只点了奇数次=选中”。上面共点了 2 次(=未选),这里再点 1 次凑成 3 次=选中。
+                clickReal(findCheckOption(dropdown, '建联中'));
+                await sleep(600);
+                setCrmStatus('已点选 建联中(选中标记无法确认,以最终筛选结果为准)');
+            }
+        }
+        await sleep(400);
+        // 收起下拉面板(再点一次同一个触发器,让下拉收起,避免遮挡确定按钮)
+        clickReal(trigger);
+        await sleep(500);
+        setCrmStatus('点击 确定…');
+        var ok = findByText('确定', ['button', 'span', 'div']);
+        if (ok) { clickReal(ok); await sleep(2000); }
+        else { setCrmStatus('没找到确定按钮,筛选可能未生效'); return false; }
+        return true;
+    }
+    // 设置每页 100 条
+    async function crmSetPageSize100() {
+        setCrmStatus('设置 100 条/页…');
+        var sizeBox = null;
+        // DevTools 确认:每页条数是 span.el-pagination__sizes 里的 div.el-select(触发器是里面的 input.el-input__inner,
+        // placeholder="请选择")。它显示的“50条/页”是 input 的 value,不是 textContent,所以不能再用文字匹配去找,
+        // 必须按结构定位,否则永远找不到、直接跳过。
+        var sizesWrap = document.querySelector('.el-pagination__sizes');
+        if (sizesWrap) {
+            var selInSizes = sizesWrap.querySelector('.el-select');
+            if (selInSizes && isElementVisible(selInSizes)) sizeBox = selInSizes;
+        }
+        if (!sizeBox) {
+            // 兜底:老的文字匹配(万一将来结构变了)
+            var candidates = document.querySelectorAll('.el-pagination .el-select, .el-pagination__sizes, .el-select');
+            for (var i = 0; i < candidates.length; i++) {
+                if (/条\/页/.test(candidates[i].textContent) && isElementVisible(candidates[i])) { sizeBox = candidates[i]; break; }
+            }
+        }
+        if (sizeBox) {
+            // 点 input 才能把下拉唤出来,直接点外层 div 有时不触发
+            var sizeTrigger = sizeBox.querySelector('.el-input__inner') || sizeBox;
+            clickReal(sizeTrigger);
+            var opened = await waitUntil(function () {
+                var items = document.querySelectorAll('.el-select-dropdown__item, li.el-select-dropdown__item');
+                for (var k = 0; k < items.length; k++) { if (isElementVisible(items[k])) return true; }
+                return false;
+            }, 4000);
+            if (opened) {
+                var items = document.querySelectorAll('.el-select-dropdown__item, li.el-select-dropdown__item');
+                for (var j = 0; j < items.length; j++) {
+                    var t = items[j].textContent.trim();
+                    // 精确匹配 100 那一项(“100条/页”或纯“100”),避免误中 1000 之类
+                    if (isElementVisible(items[j]) && (t === '100' || t === '100条/页' || /^100\s*条\/页$/.test(t))) {
+                        clickReal(items[j]); await sleep(2000); return true;
+                    }
+                }
+            }
+        }
+        setCrmStatus('未找到分页设置,跳过(可能已是100)');
+        return false;
+    }
+    // 翻到下一页
+    async function crmNextPage() {
+        var nextBtn = document.querySelector('.el-pagination button.btn-next');
+        if (nextBtn && !nextBtn.disabled && isElementVisible(nextBtn)) {
+            clickReal(nextBtn);
+            return true;
+        }
+        return false;
+    }
+    async function crmWaitTableReady(timeout) {
+        timeout = timeout || 15000;
+        var start = Date.now();
+        while (Date.now() - start < timeout) {
+            if (crmStop) throw new Error('stopped');
+            var rows = document.querySelectorAll('.el-table__body-wrapper tbody tr, .el-table__row');
+            var sa = getCrmSelectAll();
+            if (rows.length > 0 && sa) { await sleep(600); return true; }
+            await sleep(500);
+        }
+        return false;
+    }
+    async function crmStart() {
+        if (crmRunning) return;
+        var lim = parseInt(crmLimitInput.value, 10);
+        if (isNaN(lim) || lim <= 0) { alert('请输入有效的数字'); return; }
+        crmLimit = lim; crmRunning = true; crmStop = false; crmTotal = 0;
+        crmStartBtn.style.display = 'none'; crmStopBtn.style.display = 'block';
+        crmLimitInput.disabled = true;
+        var outcome = 'unknown'; // filter_fail / stopped / empty / done,决定最后弹什么提示,避免一律报“成功”
+        try {
+            var filterOk = await crmApplyFilter();
+            // 不要用笼统的“筛选步骤失败”覆盖掉 crmApplyFilter 里那条具体的失败原因,
+            // 否则每次都只看到“失败”却不知道卡在哪一步。保留原文,只在末尾追加“已停止”。
+            if (!filterOk) {
+                var last = crmStatusEl ? crmStatusEl.textContent : '';
+                setCrmStatus((last ? last : '筛选步骤失败') + ' — 已停止');
+                outcome = 'filter_fail';
+                return;
+            }
+            await crmWaitTableReady();
+            await crmSetPageSize100();
+            var firstReady = await crmWaitTableReady();
+            // 筛选后如果一行都没有,说明“建联中”很可能没真正勾上(或本来就没有建联中的人),
+            // 直接如实告知,而不是继续走完再谎报“完成,共选 0 人”。
+            if (!firstReady || countCrmRows() === 0) {
+                setCrmStatus('筛选后没有数据行,可能“建联中”未选中');
+                outcome = 'empty';
+                return;
+            }
+            while (!crmStop && crmTotal < crmLimit) {
+                var ready = await crmWaitTableReady();
+                if (!ready) { setCrmStatus('表格未就绪,停止'); break; }
+                var sa = getCrmSelectAll();
+                if (sa && !sa.classList.contains('is-checked')) {
+                    clickReal(sa);
+                    await sleep(CHECK_DELAY);
+                }
+                // 优先读网站顶部的权威计数“已选N个网红”(跨页累计的真实值)。
+                // 自己一页页累加会翻倍:el-table 有固定列时每行 checkbox 渲染两遍,一页 100 会数成 200。
+                var authoritative = readCrmSelectedCount();
+                if (authoritative !== null) {
+                    crmTotal = authoritative;
+                } else {
+                    var checked = countCrmChecked();
+                    if (checked > 0) { crmTotal += checked; }
+                }
+                setCrmStatus('已选 ' + crmTotal + ' / ' + crmLimit);
+                if (crmTotal >= crmLimit) break;
+                var hasNext = await crmNextPage();
+                if (!hasNext) { setCrmStatus('已到最后一页'); break; }
+                await sleep(NEXT_PAGE_WAIT_TIME);
+            }
+            outcome = crmStop ? 'stopped' : 'done';
+        } catch (e) {
+            console.log('[CRM] ' + e.message);
+            if (e.message === 'stopped') outcome = 'stopped';
+        } finally {
+            crmRunning = false;
+            crmStartBtn.style.display = 'block'; crmStopBtn.style.display = 'none';
+            crmLimitInput.disabled = false;
+            if (outcome === 'filter_fail') {
+                alert('筛选没成功,一个都没选。请把“团队联系状态”下拉展开的样子截图给我。');
+            } else if (outcome === 'empty') {
+                alert('筛选“建联中”后没有数据行。可能是没勾上,或当前确实没有建联中的达人。');
+            } else if (outcome === 'stopped') {
+                setCrmStatus('已停止,共选 ' + crmTotal + ' 人');
+                alert('已手动停止,共选 ' + crmTotal + ' 人');
+            } else {
+                setCrmStatus('完成,共选 ' + crmTotal + ' 人');
+                alert('CRM 全选完成,共选 ' + crmTotal + ' 人');
+            }
+        }
+    }
+    function buildCrmPanel(root) {
+        root.style.width = '210px';
+        var desc = document.createElement('span');
+        desc.innerHTML = '建联中 · 自动全选<br><span style="font-weight:normal;color:#888;font-size:11px;">筛选建联中→100条/页→逐页全选</span>';
+        desc.style.fontSize = '12px';
+        desc.style.fontWeight = 'bold';
+        var lab = document.createElement('span');
+        lab.textContent = '目标数量:';
+        lab.style.fontSize = '12px';
+        crmLimitInput = document.createElement('input');
+        crmLimitInput.type = 'number';
+        crmLimitInput.value = '1000';
+        crmLimitInput.style.padding = '5px';
+        crmLimitInput.style.border = '1px solid #ccc';
+        crmLimitInput.style.borderRadius = '4px';
+        crmStartBtn = document.createElement('button');
+        crmStartBtn.textContent = '开始筛选+全选';
+        crmStartBtn.style.padding = '10px';
+        crmStartBtn.style.backgroundColor = '#4CAF50';
+        crmStartBtn.style.color = 'white';
+        crmStartBtn.style.border = 'none';
+        crmStartBtn.style.borderRadius = '4px';
+        crmStartBtn.style.cursor = 'pointer';
+        crmStartBtn.style.fontWeight = 'bold';
+        crmStartBtn.addEventListener('click', crmStart);
+        crmStopBtn = document.createElement('button');
+        crmStopBtn.textContent = 'Stop';
+        crmStopBtn.style.padding = '8px';
+        crmStopBtn.style.backgroundColor = '#f44336';
+        crmStopBtn.style.color = 'white';
+        crmStopBtn.style.border = 'none';
+        crmStopBtn.style.borderRadius = '4px';
+        crmStopBtn.style.cursor = 'pointer';
+        crmStopBtn.style.display = 'none';
+        crmStopBtn.addEventListener('click', function () { crmStop = true; });
+        crmStatusEl = document.createElement('div');
+        crmStatusEl.style.fontSize = '11px';
+        crmStatusEl.style.color = '#555';
+        crmStatusEl.style.marginTop = '4px';
+        crmStatusEl.textContent = '就绪';
+        root.appendChild(desc);
+        root.appendChild(lab);
+        root.appendChild(crmLimitInput);
+        root.appendChild(crmStartBtn);
+        root.appendChild(crmStopBtn);
+        root.appendChild(crmStatusEl);
+    }
+    function ensureUI() {
+        if (document.body) { initializeControls(); }
+        else { setTimeout(ensureUI, 500); }
+    }
+    setInterval(function () {
+        if (!document.body) return;
+        var existing = document.getElementById('nox-script-ui');
+        if (!existing) { initializeControls(); return; }
+        var want = currentPageType();
+        if (existing.getAttribute('data-page') !== want && !folderRunning && !isScriptRunning && !emailRunning && !crmRunning) {
+            existing.remove();
+            initializeControls();
+        }
+    }, 1500);
+    ensureUI();
+})();
