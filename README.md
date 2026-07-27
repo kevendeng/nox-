@@ -62,14 +62,7 @@ https://raw.githubusercontent.com/kevendeng/nox-/main/nox-helper.user.js
 
 点 **Input keywords** 弹出输入框，输入要搜的关键词。**格式要求**：每个关键词单独占一行，可混合搜索词和排除词（中文翻译放在后面，不同行）。
 
-```
-Anime
-Manhwa
-Otaku
-Waifu
-Isekai
-Shonen
-```
+![关键词格式示例](./images/keyword-format.png)
 
 脚本工作逻辑：
 - **清空灰色搜索词**、**保留橙色排除词**，然后逐行填入你的新关键词
@@ -77,11 +70,12 @@ Shonen
 - 然后发起搜索、等待结果加载
 
 ⚠️ **已知 Bug**：偶现网卡或网页加载慢时，脚本可能会把**第一个排除词改成搜索词**，导致搜索结果不准。症状是你的排除词列表少了一个。
-- **规避方法**：网络卡顿时点”停止”、等一下后重新操作；或者手动检查一遍排除词是否完整。
 
 #### 功能 B：自动选（批量勾选）
 
 点 **Running** 弹出控制面板，可设置”Check limit”（目标数量，默认 1000），然后脚本会**自动全选、自动翻页**直到达到目标数量。
+
+![操作面板](./images/search-panel.png)
 
 - 面板显示 `Running (n/limit)` 表示已勾选数量
 - 点 **Stop** 随时停止
