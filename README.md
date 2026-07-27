@@ -77,20 +77,14 @@ https://raw.githubusercontent.com/kevendeng/nox-/main/nox-helper.user.js
 ### 2. 收藏夹 / 资源文件夹 页面
 
 批量创建文件夹。填日期前缀和编号列表（格式 `编号 > 协作者1, 协作者2`，不写协作者就是私有），可先点”预览”确认名字再批量创建。例如：
+
 1 > Mike
-
 2 > Keven
-
 3 > John
-
 m-1
-
 m-2
-
 m-K4 > Lexy
-
 m-K5 > Lexy
-
 m-E1 > Eason
 
 名字是检索的，如果有新人直接按账号名称填入即可
