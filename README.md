@@ -1,8 +1,6 @@
 # NoxInfluencer Helper 油猴脚本
 
-给 NoxInfluencer（Nox 聚星）网红开发流程用的自动化助手。装一次，之后自动更新，无需再手动复制粘贴代码。
-
----
+给 NoxInfluencer（Nox 聚星）网红开发流程用的自动化助手。
 
 ## 一、安装地址
 
@@ -12,7 +10,7 @@
 https://raw.githubusercontent.com/kevendeng/nox-/main/nox-helper.user.js
 ```
 
-> ⚠️ 访问这个地址需要能正常打开 GitHub（部分网络环境需要科学上网）。如果页面打不开，是网络问题，不是脚本问题。
+> ⚠️ 访问这个地址需要能正常打开 GitHub（部分网络环境需要科学上网）。
 
 ---
 
@@ -22,15 +20,12 @@ https://raw.githubusercontent.com/kevendeng/nox-/main/nox-helper.user.js
 
 如果浏览器还没装油猴插件，先去扩展商店搜索 **Tampermonkey** 安装。
 
-### 第 2 步：打开 Chrome 开发者模式（第一次用油猴必做）
+### 第 2 步：打开 Chrome 开发者模式
 
-1. 地址栏输入 `chrome://extensions` 回车
+1. 地址栏输入 `chrome://extensions` 回车，或者点击右上角扩展程序图标，选择管理扩展程序
 2. 打开右上角的 **开发者模式（Developer mode）** 开关
 
 ### 第 3 步：允许 Tampermonkey 访问用户脚本
-
-新版 Chrome 需要手动放开这个权限，否则脚本装不上或不生效：
-
 1. 在 `chrome://extensions` 找到 **Tampermonkey**，点 **详情（Details）**
 2. 打开 **允许用户脚本（Allow User Scripts）** 开关
 
@@ -44,9 +39,7 @@ https://raw.githubusercontent.com/kevendeng/nox-/main/nox-helper.user.js
 
 装好后油猴会**自动检查更新**（默认每天一次），有新版本会提示你一键更新。也可以手动更新：
 
-- 打开油猴面板 → 已安装脚本 → 点 **检查用户脚本更新**
-
-脚本作者更新代码并提高版本号后，你这边就能收到更新提示，不用再手动换文件。
+- 打开油猴面板 → 已安装脚本 → 点 **版本号**
 
 ---
 
@@ -60,16 +53,13 @@ https://raw.githubusercontent.com/kevendeng/nox-/main/nox-helper.user.js
 
 #### 功能 A：关键词自动填入
 
-点 **Input keywords** 弹出输入框，输入要搜的关键词。**格式要求**：每个关键词单独占一行，可混合搜索词和排除词（中文翻译放在后面，不同行）。
+点 **Input keywords** 弹出输入框，输入要搜的关键词。**格式要求**：每个关键词单独占一行
 
 ![关键词格式示例](./images/keyword-format.png)
 
 脚本工作逻辑：
 - **清空灰色搜索词**、**保留橙色排除词**，然后逐行填入你的新关键词
-- 每次搜索**读取一个关键词**（避免多词混入影响精准度）
-- 然后发起搜索、等待结果加载
-
-⚠️ **已知 Bug**：偶现网卡或网页加载慢时，脚本可能会把**第一个排除词改成搜索词**，导致搜索结果不准。症状是你的排除词列表少了一个。
+⚠️ **已知 Bug**：偶现网卡或网页加载慢时，脚本可能会把**第一个排除词改成搜索词**，导致搜索结果不准。
 
 #### 功能 B：自动选（批量勾选）
 
