@@ -64,13 +64,17 @@
     }
     // 拉取收藏夹列表(名字→ID)。返回 [{id, name, remainder, createTime}, ...]，按创建时间倒序(最新在前)。
     var __noxGroupCache = null;
+    var FOLDER_CAP = 5000; // 每个收藏夹固定容量上限
     async function fetchGroups(force) {
         if (__noxGroupCache && !force) return __noxGroupCache;
         var res = await fetch('https://cn.noxinfluencer.com/ws/collection/simpleGroupList', { credentials: 'include' });
         var d = await res.json();
         var arr = (d && d.retDataList) || [];
         arr = arr.map(function (g) {
-            return { id: g.id, name: g.name, remainder: g.remainder, createTime: g.createTime || 0 };
+            // filled = 已填入人数 = 上限 - 剩余。用户关心的是“已经装了多少人”，不是剩余额度。
+            var rem = (g.remainder != null) ? g.remainder : null;
+            var filled = (rem != null) ? (FOLDER_CAP - rem) : null;
+            return { id: g.id, name: g.name, remainder: rem, filled: filled, createTime: g.createTime || 0 };
         }).sort(function (a, b) { return (b.createTime || 0) - (a.createTime || 0); });
         __noxGroupCache = arr;
         return arr;
@@ -135,18 +139,21 @@
     // 处理当前页:等渲染稳 → 抓可见 id(不超过剩余名额) → 调接口收藏。返回本页实际收藏数。
     async function processCurrentPage() {
         if (totalUsersChecked >= maxCheckLimit) { stopRequested = true; return 0; }
+        setCollectStatus('第' + currentPageNum + '页：等待渲染…');
         var isReady = await waitForCollectPageReady();
-        if (!isReady) return 0;
+        if (!isReady) { setCollectStatus('第' + currentPageNum + '页：未渲染出结果'); return 0; }
         var ids = getVisibleChannelIds();
-        if (!ids.length) return 0; // 本页全是隐藏的，跳过、继续翻页
+        if (!ids.length) { setCollectStatus('第' + currentPageNum + '页：本页无可见达人(全隐藏)，跳过'); return 0; }
         var remaining = maxCheckLimit - totalUsersChecked;
         if (ids.length > remaining) ids = ids.slice(0, remaining);
+        setCollectStatus('第' + currentPageNum + '页：收藏 ' + ids.length + ' 个…');
         var r = await collectViaApi(ids, collectGroupIds, collectPlatform);
         if (r.status !== 200) {
-            throw new Error('收藏接口返回 ' + r.status + '，已停止。请检查登录状态或收藏夹ID。');
+            throw new Error('收藏接口返回 ' + r.status + '，已停止。请检查登录状态或收藏夹。');
         }
         totalUsersChecked += ids.length;
         updateButtonText();
+        setCollectStatus('已收藏 ' + totalUsersChecked + '/' + maxCheckLimit + '（第' + currentPageNum + '页 +' + ids.length + '）');
         return ids.length;
     }
     async function goToNextPage() {
@@ -177,14 +184,17 @@
         isScriptRunning = true;
         stopRequested = false;
         totalUsersChecked = 0;
+        currentPageNum = 1;
         updateUIStatus(true);
         var stopMsg = '';
         try {
             while (!stopRequested && totalUsersChecked < maxCheckLimit) {
                 await processCurrentPage();
                 if (stopRequested || totalUsersChecked >= maxCheckLimit) break;
+                setCollectStatus('已收藏 ' + totalUsersChecked + '/' + maxCheckLimit + '，翻到第' + (currentPageNum + 1) + '页…');
                 var hasNext = await goToNextPage();
                 if (!hasNext) { stopMsg = '已到最后一页。'; break; }
+                currentPageNum++;
                 await sleep(NEXT_PAGE_WAIT_TIME);
             }
         } catch (error) {
@@ -193,6 +203,9 @@
         } finally {
             isScriptRunning = false;
             updateUIStatus(false);
+            setCollectStatus((stopMsg ? stopMsg + ' ' : '') + '完成，共收藏 ' + totalUsersChecked + ' 个');
+            // 收藏后刷新收藏夹列表，"已装人数"会更新
+            loadGroupsIntoPanel(true);
             alert((stopMsg ? stopMsg + '\n' : '') + '完成，共收藏 ' + totalUsersChecked + ' 个达人。');
         }
     }
@@ -274,7 +287,9 @@
         else alert('All keywords added!');
     }
     var startButton, stopButton, limitInput, controlsDiv, keywordButton;
-    var groupFilterInput, groupSelectEl, groupRefreshBtn, groupSelectedLabel;
+    var groupFilterInput, groupSelectEl, groupRefreshBtn, groupSelectedLabel, collectStatusEl;
+    var currentPageNum = 0;
+    function setCollectStatus(t) { if (collectStatusEl) collectStatusEl.textContent = t; }
     function isFolderPage() { return location.href.indexOf('/resource-folder/') !== -1; }
     function isEmailPage() { return location.href.indexOf('/email/') !== -1; }
     function isCrmPage() { return location.href.indexOf('/crm-detail/') !== -1; }
@@ -575,7 +590,7 @@
         shown.forEach(function (g) {
             var opt = document.createElement('option');
             opt.value = String(g.id);
-            opt.textContent = g.name + '  (剩余' + (g.remainder != null ? g.remainder : '?') + ')';
+            opt.textContent = g.name + '  (已装' + (g.filled != null ? g.filled : '?') + '人)';
             opt._group = g;
             if (prevSel[g.id]) opt.selected = true;
             groupSelectEl.appendChild(opt);
@@ -692,6 +707,10 @@
         root.appendChild(limitInput);
         root.appendChild(startButton);
         root.appendChild(stopButton);
+        collectStatusEl = document.createElement('div');
+        collectStatusEl.style.cssText = 'font-size:12px;color:#4CAF50;text-align:center;min-height:16px;font-weight:bold;';
+        collectStatusEl.textContent = '就绪';
+        root.appendChild(collectStatusEl);
         // 面板出现后自动拉一次收藏夹列表
         loadGroupsIntoPanel(false);
     }
