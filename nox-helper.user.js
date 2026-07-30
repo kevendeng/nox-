@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NoxInfluencer Helper
 // @namespace    http://tampermonkey.net/
-// @version      8.7
+// @version      8.8
 // @description  auto collect (via API), keyword input, batch-create folders, and email project automation
 // @match        https://cn.noxinfluencer.com/search/*
 // @match        https://cn.noxinfluencer.com/lookalike/*
@@ -17,7 +17,7 @@
     'use strict';
     // 统一版本号:以后升级只改这一处(以及头部 @version),面板标题/日志会自动跟着变,
     // 避免出现“头部 8.6、面板还写 8.5”这种对不上的情况。
-    var SCRIPT_VERSION = '8.7';
+    var SCRIPT_VERSION = '8.8';
     console.log('Nox helper V' + SCRIPT_VERSION + ' started');
     var isScriptRunning = false;
     var stopRequested = false;
@@ -76,7 +76,9 @@
         return arr;
     }
     // 只抓“可见”达人的 channelId。被隐藏(建联过/已合作)的达人带 .youtube-channel-fade，一律排除。
-    // 再叠加 offsetParent 判断作双保险。channelId 从卡片里 /channel/<数字> 链接抠出。
+    // 再叠加 offsetParent 判断作双保险。channelId 从卡片里 /channel/<id> 链接抠出。
+    // 注意:不同平台 id 格式不同——instagram 是纯数字(20575005572)，YouTube 是 UCxxx 字母串。
+    // 所以匹配 /channel/ 后到下一个斜杠/问号/井号前的整段，不能只认数字。
     function getVisibleChannelIds() {
         var items = document.querySelectorAll('.youtube-channel-item:not(.youtube-channel-fade)');
         var ids = [];
@@ -85,7 +87,7 @@
             if (item.offsetParent === null) continue; // 双保险:确实在页面上渲染出来的
             var a = item.querySelector('a[href*="/channel/"]');
             if (!a) continue;
-            var mm = (a.getAttribute('href') || '').match(/\/channel\/(\d+)/);
+            var mm = (a.getAttribute('href') || '').match(/\/channel\/([^\/?#]+)/);
             if (mm) ids.push(mm[1]);
         }
         // 去重(卡片里有多个同 id 链接)
