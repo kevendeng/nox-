@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NoxInfluencer Helper
 // @namespace    http://tampermonkey.net/
-// @version      8.8
+// @version      8.9
 // @description  auto collect (via API), keyword input, batch-create folders, and email project automation
 // @match        https://cn.noxinfluencer.com/search/*
 // @match        https://cn.noxinfluencer.com/lookalike/*
@@ -17,7 +17,7 @@
     'use strict';
     // 统一版本号:以后升级只改这一处(以及头部 @version),面板标题/日志会自动跟着变,
     // 避免出现“头部 8.6、面板还写 8.5”这种对不上的情况。
-    var SCRIPT_VERSION = '8.8';
+    var SCRIPT_VERSION = '8.9';
     console.log('Nox helper V' + SCRIPT_VERSION + ' started');
     var isScriptRunning = false;
     var stopRequested = false;
@@ -54,7 +54,7 @@
     }
     // 平台编号:instagram=6(已确认)。其它平台的值待确认，先按常见约定猜，认不出时兜底 6 并在控制台提示。
     // 从当前网址自动识别，用户无需手动输入。
-    var PLATFORM_MAP = { instagram: 6, youtube: 1, tiktok: 4, twitter: 3, twitch: 5 };
+    var PLATFORM_MAP = { instagram: 6, youtube: 1, tiktok: 10, twitter: 3, twitch: 5 };
     function getPlatformFromUrl() {
         var m = location.pathname.match(/\/search\/([^\/]+)/) || location.pathname.match(/\/lookalike\/([^\/]+)/);
         var key = m ? m[1].toLowerCase() : '';
