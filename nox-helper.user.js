@@ -577,12 +577,17 @@
     // 用过滤词刷新下拉里的收藏夹选项。filter 为空则显示最新的 MAX 个。
     function populateGroupOptions(groups, filter) {
         if (!groupSelectEl) return;
-        var MAX = 200; // 下拉最多显示这么多，避免 5000+ 卡顿；配合过滤词定位当天的夹
         var kw = (filter || '').trim().toLowerCase();
-        var matched = groups.filter(function (g) {
-            return !kw || (g.name || '').toLowerCase().indexOf(kw) !== -1;
-        });
-        var shown = matched.slice(0, MAX);
+        // 没输过滤词:只显示最新创建的 50 个(倒序,最新在前),保持清爽;
+        // 一旦输入过滤词:在全部收藏夹里搜,覆盖全量。
+        var shown;
+        if (!kw) {
+            shown = groups.slice(0, 50);
+        } else {
+            shown = groups.filter(function (g) {
+                return (g.name || '').toLowerCase().indexOf(kw) !== -1;
+            });
+        }
         // 记住已选中的 id，重建后尽量保持勾选
         var prevSel = {};
         selectedGroups.forEach(function (g) { prevSel[g.id] = 1; });
@@ -595,8 +600,7 @@
             if (prevSel[g.id]) opt.selected = true;
             groupSelectEl.appendChild(opt);
         });
-        var note = matched.length > shown.length ? ('，仅显示前' + MAX + '个，用上方过滤缩小') : '';
-        if (groupSelectedLabel) groupSelectedLabel.textContent = '共 ' + groups.length + ' 个夹，匹配 ' + matched.length + note;
+        if (groupSelectedLabel) groupSelectedLabel.textContent = '';
     }
     function syncSelectedGroups() {
         selectedGroups = [];
