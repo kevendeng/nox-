@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NoxInfluencer Helper
 // @namespace    http://tampermonkey.net/
-// @version      8.9
+// @version      9.0
 // @description  auto collect (via API), keyword input, batch-create folders, and email project automation
 // @match        https://cn.noxinfluencer.com/search/*
 // @match        https://cn.noxinfluencer.com/lookalike/*
@@ -17,7 +17,7 @@
     'use strict';
     // 统一版本号:以后升级只改这一处(以及头部 @version),面板标题/日志会自动跟着变,
     // 避免出现“头部 8.6、面板还写 8.5”这种对不上的情况。
-    var SCRIPT_VERSION = '8.9';
+    var SCRIPT_VERSION = '9.0';
     console.log('Nox helper V' + SCRIPT_VERSION + ' started');
     var isScriptRunning = false;
     var stopRequested = false;
